@@ -31,7 +31,34 @@ static int addr = 0x68;
 #define DISPLAY_ADDRESS 0x3C
 
 #define DEBOUNCE_TIME 300
-#define BUZZER_FREQUENCY 4000/// Frequência do buzzer em Hz
+#define BUZZER_FREQUENCY 4000
+
+typedef struct
+{
+    uint32_t sample_num;
+    float accel_x, accel_y, accel_z;
+    float gyro_x, gyro_y, gyro_z;
+    datetime_t timestamp;
+} ImuSample;
+
+#define MAX_SAMPLES 3000
+
+enum MODE
+{
+    WAITING,
+    SDMOUNT,
+    READY,
+    CAPTURING,
+    ACESSING,
+    ERROR
+};
+
+typedef struct
+{
+    enum MODE new_mode;
+    uint32_t sample_count; 
+} DisplayMessage;
+static char filename[20] = "datalog.csv";
 
 void gpio_irq_handler(uint gpio, uint32_t events);
 
@@ -225,6 +252,7 @@ void unmount_sd_card() {
     sd_card_t *pSD = sd_get_by_name(drive_path);
     if (pSD) {
         pSD->mounted = false;
+        pSD->m_Status |= STA_NOINIT; 
     }
     printf("Cartao SD desmontado.\n");
 }

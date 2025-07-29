@@ -44,6 +44,7 @@
         "clocks.h": "c",
         "random": "c",
         "limits": "c",
-        "f_util.h": "c"
+        "f_util.h": "c",
+        "sd_card.h": "c"
     }
 }

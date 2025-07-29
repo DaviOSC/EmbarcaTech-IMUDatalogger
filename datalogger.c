@@ -18,37 +18,8 @@
 #include "hw_config.h"
 #include "sd_card.h"
 
-typedef struct
-{
-    uint32_t sample_num;
-    float accel_x, accel_y, accel_z;
-    float gyro_x, gyro_y, gyro_z;
-    datetime_t timestamp;
-} ImuSample;
-
-#define MAX_SAMPLES 3000
-
-enum MODE
-{
-    WAITING,
-    SDMOUNT,
-    READY,
-    CAPTURING,
-    ACESSING,
-    ERROR
-};
-
-typedef struct
-{
-    enum MODE new_mode;
-    uint32_t sample_count; 
-} DisplayMessage;
-
 SemaphoreHandle_t xBuzzerSemaphore, xButtonASemaphore, xButtonBSemaphore;
 QueueHandle_t xDisplayQueue, xLedQueue;
-static char filename[20] = "datalog.csv";
-
-static enum MODE current_mode = WAITING;
 
 void gpio_irq_handler(uint gpio, uint32_t events)
 {
@@ -108,6 +79,13 @@ void vControlTask(void *pvParameters)
                 vTaskDelay(pdMS_TO_TICKS(80));
                 xSemaphoreGive(xBuzzerSemaphore);
                 update_system_state(ACESSING);
+            }
+            else if (current_mode == ACESSING)
+            {
+                xSemaphoreGive(xBuzzerSemaphore);
+                vTaskDelay(pdMS_TO_TICKS(80));
+                xSemaphoreGive(xBuzzerSemaphore);
+                update_system_state(READY);
             }
             else if (current_mode == ERROR)
             {
@@ -204,10 +182,8 @@ void vControlTask(void *pvParameters)
                     break;
                 }
 
-                // --- OTIMIZAÇÃO: Feedback visual durante a gravação ---
                 if (i > 0 && i % 100 == 0)
                 {
-                    // Envia uma atualização para o display a cada 100 amostras salvas
                     DisplayMessage prog_msg = {.new_mode = ACESSING, .sample_count = i};
                     xQueueSend(xDisplayQueue, &prog_msg, 0);
                 }
@@ -219,10 +195,6 @@ void vControlTask(void *pvParameters)
             if (write_error)
             {
                 update_system_state(ERROR);
-            }
-            else
-            {
-                update_system_state(READY);
             }
         }
         else
@@ -266,28 +238,33 @@ void vDisplayTask(void *pvParameters)
         switch (msg.new_mode)
         {
         case WAITING:
-            ssd1306_draw_string(&ssd, "Aperte B para", 12, 22);
-            ssd1306_draw_string(&ssd, "montar o SD Card", 8, 34);
+            ssd1306_draw_string(&ssd, "Aperte B para", 8, 22);
+            ssd1306_draw_string(&ssd, "montar o SD", 8, 34);
+            ssd1306_draw_string(&ssd, "card", 8, 46);
             break;
         case SDMOUNT:
-            ssd1306_draw_string(&ssd, "Montando cartao SD...", 8, 22);
+            ssd1306_draw_string(&ssd, "Montando o ", 8, 22);
+            ssd1306_draw_string(&ssd, "cartao SD...", 8, 34);
             break;
         case READY:
-            ssd1306_draw_string(&ssd, "Pronto para gravar.", 8, 22);
+            ssd1306_draw_string(&ssd, "Pronto para", 8, 22);
+            ssd1306_draw_string(&ssd, "gravar.", 8, 34);
             break;
         case CAPTURING:
-            ssd1306_draw_string(&ssd, "Gravando dados...", 8, 22);
+            ssd1306_draw_string(&ssd, "Capturando...", 8, 22);
             sprintf(buffer, "Amostras: %lu", msg.sample_count);
             ssd1306_draw_string(&ssd, buffer, 8, 34);
             break;
         case ACESSING:
-            ssd1306_draw_string(&ssd, "Salvando dados...", 8, 22);
-            sprintf(buffer, "Gravado: %lu", msg.sample_count);
+            ssd1306_draw_string(&ssd, "Salvando...", 8, 22);
+            sprintf(buffer, "Salvos: %lu", msg.sample_count);
             ssd1306_draw_string(&ssd, buffer, 8, 34);
             break;
         case ERROR:
-            ssd1306_draw_string(&ssd, "ERRO NO SISTEMA!", 8, 22);
-            ssd1306_draw_string(&ssd, "Aperte A p/ Reset", 8, 34);
+            ssd1306_draw_string(&ssd, "ERRO!", 8, 22);
+            ssd1306_draw_string(&ssd, "Aperte A para", 8, 34);
+            ssd1306_draw_string(&ssd, "Reset", 8, 46);
+
             break;
         default:
             ssd1306_draw_string(&ssd, "Estado desconhecido", 8, 22);
