@@ -47,16 +47,19 @@ void gpio_irq_handler(uint gpio, uint32_t events)
 
 void vControlTask(void *pvParameters)
 {
+    // Variáveis locais para controlar o estado
     enum MODE current_mode = WAITING;
     bool is_mounted = false;
     FIL file;
     static ImuSample data_buffer[MAX_SAMPLES];
     uint32_t samples_in_buffer = 0;
 
+    // Função interna para atualizar o estado e notificar outras tarefas
     void update_system_state(enum MODE new_mode)
     {
         current_mode = new_mode;
         DisplayMessage msg = {.new_mode = current_mode, .sample_count = samples_in_buffer};
+        // Envia a mensagem para a fila do Display e do LED
         xQueueSend(xDisplayQueue, &msg, 0);
         xQueueSend(xLedQueue, &msg, 0);
     };
@@ -65,16 +68,19 @@ void vControlTask(void *pvParameters)
 
     while (true)
     {
+        // Verifica se o Botão A foi pressionado
         if (xSemaphoreTake(xButtonASemaphore, 0) == pdTRUE)
         {
             if (current_mode == READY)
             {
+                // Inicia a captura
                 samples_in_buffer = 0;
                 xSemaphoreGive(xBuzzerSemaphore);
                 update_system_state(CAPTURING);
             }
             else if (current_mode == CAPTURING)
             {
+                // Para a captura e inicia a gravação
                 xSemaphoreGive(xBuzzerSemaphore);
                 vTaskDelay(pdMS_TO_TICKS(80));
                 xSemaphoreGive(xBuzzerSemaphore);
@@ -82,6 +88,7 @@ void vControlTask(void *pvParameters)
             }
             else if (current_mode == ACESSING)
             {
+                // Para a gravação e retorna ao estado READY
                 xSemaphoreGive(xBuzzerSemaphore);
                 vTaskDelay(pdMS_TO_TICKS(80));
                 xSemaphoreGive(xBuzzerSemaphore);
@@ -89,14 +96,16 @@ void vControlTask(void *pvParameters)
             }
             else if (current_mode == ERROR)
             {
+                // Se ocorreu um erro, reinicia o sistema
                 update_system_state(WAITING);
             }
         }
-
+        // Verifica se o Botão B foi pressionado
         if (xSemaphoreTake(xButtonBSemaphore, 0) == pdTRUE)
         {
             if (!is_mounted)
             {
+                // Tenta montar o cartão SD
                 update_system_state(SDMOUNT);
                 vTaskDelay(pdMS_TO_TICKS(50));
                 if (mount_sd_card())
@@ -120,11 +129,12 @@ void vControlTask(void *pvParameters)
                 update_system_state(WAITING);
             }
         }
-
+        // Se estiver no modo de captura, coleta dados do IMU e armazena no buffer
         if (current_mode == CAPTURING)
         {
             if (samples_in_buffer < MAX_SAMPLES)
             {
+                // Lê o sensor e armazena no buffer
                 int16_t aceleracao[3], gyro[3], temp;
                 mpu6050_read_raw(aceleracao, gyro, &temp);
 
@@ -144,10 +154,12 @@ void vControlTask(void *pvParameters)
             }
             else
             {
+                // Se o buffer encher, inicia a gravação automaticamente
                 update_system_state(ACESSING);
             }
             vTaskDelay(pdMS_TO_TICKS(100));
         }
+        // Se estiver no modo de acesso, salva os dados da RAM no SD
         else if (current_mode == ACESSING)
         {
             FRESULT fr;
@@ -159,12 +171,14 @@ void vControlTask(void *pvParameters)
                 update_system_state(ERROR);
                 continue;
             }
-
+            
+            // Escreve o cabeçalho no arquivo
             const char *header = "numero_amostra,accel_x,accel_y,accel_z,giro_x,giro_y,giro_z,data_hora\n";
             f_write(&file, header, strlen(header), &bytes_written);
 
             char buffer[150];
             bool write_error = false;
+            // Percorre o buffer da RAM e escreve cada amostra no arquivo
             for (int i = 0; i < samples_in_buffer; i++)
             {
                 ImuSample *s = &data_buffer[i];
@@ -181,14 +195,14 @@ void vControlTask(void *pvParameters)
                     write_error = true;
                     break;
                 }
-
+                // Envia uma atualização para o display a cada 100 amostras salvas
                 if (i > 0 && i % 100 == 0)
                 {
                     DisplayMessage prog_msg = {.new_mode = ACESSING, .sample_count = i};
                     xQueueSend(xDisplayQueue, &prog_msg, 0);
                 }
             }
-
+            // Garante que todos os dados foram escritos e fecha o arquivo
             f_sync(&file);
             f_close(&file);
 
@@ -229,12 +243,14 @@ void vDisplayTask(void *pvParameters)
 
     while (true)
     {
+        // Aguarda uma nova mensagem na fila
         xQueueReceive(xDisplayQueue, &msg, portMAX_DELAY);
         ssd1306_fill(&ssd, 0);
         ssd1306_rect(&ssd, 2, 2, 124, 60, true, false);
         ssd1306_draw_string(&ssd, "DATALOGGER", 25, 5);
         ssd1306_line(&ssd, 3, 15, 125, 15, true);
         char buffer[32];
+        // Desenha a informação a depender do modo
         switch (msg.new_mode)
         {
         case WAITING:
@@ -264,7 +280,6 @@ void vDisplayTask(void *pvParameters)
             ssd1306_draw_string(&ssd, "ERRO!", 8, 22);
             ssd1306_draw_string(&ssd, "Aperte A para", 8, 34);
             ssd1306_draw_string(&ssd, "Reset", 8, 46);
-
             break;
         default:
             ssd1306_draw_string(&ssd, "Estado desconhecido", 8, 22);
@@ -332,7 +347,10 @@ void vLedTask(void *pvParameters)
 
 int main()
 {
+    // Inicializa a comunicação serial
     stdio_init_all();
+
+    // Inicializa e configura o Relógio de Tempo Real (RTC)
     rtc_init();
     datetime_t t = {
         .year = 2024,
@@ -370,12 +388,14 @@ int main()
     gpio_set_irq_enabled_with_callback(BUTTON_B, GPIO_IRQ_EDGE_FALL, true, &gpio_irq_handler);
     gpio_set_irq_enabled(BUTTON_J, GPIO_IRQ_EDGE_FALL, true);
 
+    // Cria as filas e semáforos do FreeRTOS
     xBuzzerSemaphore = xSemaphoreCreateBinary();
     xButtonASemaphore = xSemaphoreCreateBinary();
     xButtonBSemaphore = xSemaphoreCreateBinary();
     xDisplayQueue = xQueueCreate(5, sizeof(DisplayMessage));
     xLedQueue = xQueueCreate(5, sizeof(DisplayMessage));
 
+    // Cria as tarefas
     xTaskCreate(vDisplayTask, "DisplayTask", 1024, NULL, 2, NULL);
     xTaskCreate(vLedTask, "LedTask", 256, NULL, 1, NULL);
     xTaskCreate(vBuzzerTask, "BuzzerTask", 256, NULL, 1, NULL);

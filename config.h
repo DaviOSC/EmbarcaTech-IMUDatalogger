@@ -5,7 +5,6 @@
 #include "diskio.h"
 #include "f_util.h"
 #include "hw_config.h"
-#include "my_debug.h"
 #include "rtc.h"
 #include "sd_card.h"
 #include <string.h>
@@ -18,12 +17,10 @@
 #define BUTTON_J 22
 #define BUZZER_PIN_A 21
 
-
 #define I2C_PORT i2c0
 #define I2C_SDA 0
 #define I2C_SCL 1
 static int addr = 0x68;
-
 
 #define I2C_PORT_DISP i2c1
 #define I2C_SDA_DISP 14
@@ -33,14 +30,16 @@ static int addr = 0x68;
 #define DEBOUNCE_TIME 300
 #define BUZZER_FREQUENCY 4000
 
+// Estrutura para uma única amostra de dados do IMU
 typedef struct
 {
     uint32_t sample_num;
     float accel_x, accel_y, accel_z;
     float gyro_x, gyro_y, gyro_z;
-    datetime_t timestamp;
+    datetime_t timestamp; //Armazena a data e hora
 } ImuSample;
 
+//máximo de amostras na RAM
 #define MAX_SAMPLES 3000
 
 enum MODE
@@ -53,6 +52,7 @@ enum MODE
     ERROR
 };
 
+// Mensagem comunicação entre tarefas
 typedef struct
 {
     enum MODE new_mode;
@@ -94,22 +94,26 @@ void beep(uint pin, uint duration_ms) {
     pwm_set_gpio_level(pin, 0);
 }
 
+//Encontra uma estrutura de cartão SD pelo seu nome
 static sd_card_t *sd_get_by_name(const char *const name)
 {
+    // Percorre todos os cartões SD disponíveis no sistema.
     for (size_t i = 0; i < sd_get_num(); ++i)
         if (0 == strcmp(sd_get_by_num(i)->pcName, name))
-            return sd_get_by_num(i);
-    DBG_PRINTF("%s: unknown name %s\n", __func__, name);
+            return sd_get_by_num(i); // Se os nomes correspondem, retorna o ponteiro para o cartão
     return NULL;
 }
+
+//Encontra uma FATFS pelo nome do drive.
 static FATFS *sd_get_fs_by_name(const char *name)
 {
     for (size_t i = 0; i < sd_get_num(); ++i)
         if (0 == strcmp(sd_get_by_num(i)->pcName, name))
             return &sd_get_by_num(i)->fatfs;
-    DBG_PRINTF("%s: unknown name %s\n", __func__, name);
     return NULL;
 }
+
+//Lê os dados do sensor IMU MPU6050 via I2C
 static void mpu6050_read_raw(int16_t accel[3], int16_t gyro[3], int16_t *temp)
 {
     uint8_t buffer[6];
@@ -131,36 +135,12 @@ static void mpu6050_read_raw(int16_t accel[3], int16_t gyro[3], int16_t *temp)
     *temp = (buffer[0] << 8) | buffer[1];
 }
 
-
-static void run_mount()
-{
-    const char *arg1 = strtok(NULL, " ");
-    if (!arg1)
-        arg1 = sd_get_by_num(0)->pcName;
-    FATFS *p_fs = sd_get_fs_by_name(arg1);
-    if (!p_fs)
-    {
-        printf("Unknown logical drive number: \"%s\"\n", arg1);
-        return;
-    }
-    FRESULT fr = f_mount(p_fs, arg1, 1);
-    if (FR_OK != fr)
-    {
-        printf("f_mount error: %s (%d)\n", FRESULT_str(fr), fr);
-        return;
-    }
-    sd_card_t *pSD = sd_get_by_name(arg1);
-    myASSERT(pSD);
-    pSD->mounted = true;
-    printf("Processo de montagem do SD ( %s ) concluído\n", pSD->pcName);
-}
-
 void capture_imu_data_and_save(const char *filename, int num_samples)
 {
     FIL file;
     FRESULT res;
 
-    // 1. Abre o arquivo para escrita, criando-o se não existir.
+    // Abre o arquivo para escrita, criando-o se não existir.
     res = f_open(&file, filename, FA_WRITE | FA_CREATE_ALWAYS);
     if (res != FR_OK)
     {
@@ -168,20 +148,18 @@ void capture_imu_data_and_save(const char *filename, int num_samples)
         return;
     }
 
-    // 2. Escreve o cabeçalho no arquivo .csv, conforme o requisito.
+    // Escreve o cabeçalho no arquivo .csv
     const char *header = "numero_amostra,accel_x,accel_y,accel_z,giro_x,giro_y,giro_z\n";
     UINT bytes_written;
     f_write(&file, header, strlen(header), &bytes_written);
 
-    // 3. Loop para capturar e salvar o número de amostras definido.
+    //Loop para capturar e salvar o número de amostras definido.
     for (int i = 0; i < num_samples; i++)
     {
         int16_t aceleracao[3], gyro[3], temp;
 
-        // Lê os dados brutos do sensor MPU6050.
         mpu6050_read_raw(aceleracao, gyro, &temp);
 
-        // Converte os dados brutos para unidades físicas (opcional, mas recomendado).
         // A sensibilidade padrão é 16384 para aceleração e 131 para giroscópio.
         float ax = aceleracao[0] / 16384.0f;
         float ay = aceleracao[1] / 16384.0f;
@@ -190,31 +168,26 @@ void capture_imu_data_and_save(const char *filename, int num_samples)
         float gy = gyro[1] / 131.0f;
         float gz = gyro[2] / 131.0f;
 
-        // 4. Formata a string com todos os dados no formato CSV.
-        // Aumentamos o buffer para garantir que todos os dados caibam.
+        //Formata a string com todos os dados no formato CSV.
         char buffer[128];
         int len = snprintf(buffer, sizeof(buffer), "%d,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n",
                            i + 1, ax, ay, az, gx, gy, gz);
 
-        // 5. Escreve a linha formatada no arquivo.
         res = f_write(&file, buffer, len, &bytes_written);
         if (res != FR_OK)
         {
             printf("ERRO: Falha ao escrever no arquivo na amostra %d\n", i + 1);
-            break; // Sai do loop em caso de erro.
+            break; 
         }
 
-        // Aguarda um tempo entre as amostras (ex: 100ms para 10Hz).
         sleep_ms(100);
     }
-
-    // 6. Fecha o arquivo para garantir que todos os dados sejam salvos.
     f_close(&file);
     printf("Dados salvos com sucesso em %s\n", filename);
 }
 
 bool mount_sd_card() {
-    // Pega o caminho do primeiro cartão, ex: "0:"
+    // Pega o caminho do primeiro cartão
     const char *drive_path = sd_get_by_num(0)->pcName;
     if (!drive_path) {
         printf("ERRO: Nao foi possivel encontrar o caminho do SD card.\n");
@@ -242,9 +215,6 @@ bool mount_sd_card() {
     return true;
 }
 
-/**
- * @brief Desmonta o primeiro cartão SD encontrado.
- */
 void unmount_sd_card() {
     const char *drive_path = sd_get_by_num(0)->pcName;
     f_mount(NULL, drive_path, 1);
